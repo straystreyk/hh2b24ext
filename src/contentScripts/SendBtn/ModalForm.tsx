@@ -202,10 +202,11 @@ export function ModalForm() {
   };
 
   const addContact = async (fields: Record<string, any>) => {
-    const resp = await request<number>({
+    const resp = await request<{ result: number }>({
       type: "BITRIX_ADD_CONTACT",
       fields,
     });
+
     return ensureOk(resp, "Не удалось создать контакт").data;
   };
 
@@ -444,7 +445,7 @@ export function ModalForm() {
         const crmDealFields = await getCrmDealFields();
 
         await createDeal({
-          contactId: String(createdContactId),
+          contactId: String(createdContactId.result),
           formValues: { resumeBase64, vacancy, recruiter },
           resumeData: resume,
           crmFields: crmDealFields,
