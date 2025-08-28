@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "HH2B24 Провайдер",
+  "short_name": "HH2B24",
+  "version": "1.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw8mPVG8/KLiLnCnF4X7BCgU96/cnst5C2ez+Hq0btoY7HOewaSjxeC4v/10BBXqT/YeRxQrsKIRKyiEtkmNg7QeRIIkBVdBCqPf9y+VBlDtiQWuvNDZ6uCkMuQ5OByW7Clpy3PSca7UmCKizRPDS++WswcB99ghz8g12yx0J5rWQPGVFn3MekV+ite8siWD03xk5dUN7OdI2WAm1/tavshUNoJfnBo+LwJdg9r9B9ccm62EDeBXfPlGXZ4FvXy/o31ZmVyUrouMBj+aM2hMPtl/5ZCRmeFTIBr9V1l2lQqXn76r04O5hkf6Z3f5JIoOFD0lRDkhXsQYmrf7TktJFkQIDAQAB",
+  "background": {
+    "service_worker": "background/background.ts",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "H2B24 Провайдер",
+    "default_popup": "src/popup/index.html",
+    "default_icon": {
+      "16": "src/assets/favicon/image16.png",
+      "48": "src/assets/favicon/image48.png",
+      "128": "src/assets/favicon/image128.png"
+    }
+  },
+  "icons": {
+    "16": "src/assets/favicon/image16.png",
+    "48": "src/assets/favicon/image48.png",
+    "128": "src/assets/favicon/image128.png"
+  },
+  "content_scripts": [
+    {
+      "js": [
+        "src/contentScripts/SendBtn/main.tsx"
+      ],
+      "matches": [
+        "https://hh.ru/resume*",
+        "https://*.hh.ru/resume*"
+      ]
+    }
+  ],
+  "permissions": [
+    "storage",
+    "identity",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ]
+}

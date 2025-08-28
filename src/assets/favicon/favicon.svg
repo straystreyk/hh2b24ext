@@ -1,0 +1,24 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- Фон с мягкими углами -->
+    <rect x="24" y="24" width="464" height="464" rx="96" fill="url(#g)"/>
+
+    <!-- Лист резюме -->
+    <rect x="112" y="128" width="168" height="240" rx="16" fill="white" opacity="0.96"/>
+    <rect x="132" y="156" width="128" height="16" rx="8" fill="#D9E3F0"/>
+    <rect x="132" y="188" width="128" height="16" rx="8" fill="#D9E3F0"/>
+    <rect x="132" y="220" width="96"  height="16" rx="8" fill="#D9E3F0"/>
+    <rect x="132" y="268" width="128" height="10" rx="5" fill="#D9E3F0"/>
+    <rect x="132" y="292" width="112" height="10" rx="5" fill="#D9E3F0"/>
+    <rect x="132" y="316" width="92"  height="10" rx="5" fill="#D9E3F0"/>
+
+    <!-- Стрелка вправо -->
+    <path d="M260 248h128" stroke="white" stroke-width="26" stroke-linecap="round"/>
+    <path d="M360 200l64 48-64 48" fill="none" stroke="white" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <defs>
+        <linearGradient id="g" x1="24" y1="24" x2="488" y2="488" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#1677FF"/>
+            <stop offset="1" stop-color="#2FC6F7"/>
+        </linearGradient>
+    </defs>
+</svg>

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link href="../styles/index.css" rel="stylesheet">
+    <style>
+      /* Показывать лоадер, пока #root пуст */
+      #root:empty {
+        width: 360px;          /* под вашу разметку */
+        min-height: 420px;
+        display: grid;
+        place-items: center;
+        background: #fff;
+      }
+
+      /* Сам спиннер */
+      #root:empty::after {
+        content: "";
+        width: 28px;
+        height: 28px;
+        border: 2px solid #e5e7eb;
+        border-top-color: #1677ff; /* antd primary */
+        border-radius: 50%;
+        animation: hhspin .8s linear infinite;
+      }
+      @keyframes hhspin { to { transform: rotate(360deg); } }
+    </style>
+    <title>Document</title>
+  </head>
+  <body>
+    <div id="root" style="width: 550px;min-height: 500px"></div>
+    <script type="module" src="./src/main.tsx"></script>
+  </body>
+</html>
