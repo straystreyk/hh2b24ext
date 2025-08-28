@@ -25,23 +25,12 @@ import {
 } from "@ant-design/icons";
 import MainPage from "./pages/Main";
 import SettingsPage from "./pages/Settings";
-import { useQuery } from "@tanstack/react-query";
-import type { Msg } from "../../../shared/@types";
 import { clearToken } from "../../../shared/storage.ts";
+import { useGetMe } from "./queires.ts";
 
 // Навигационная шапка на antd Menu
 function TopNav() {
-  const { data: { data } = {} } = useQuery<{
-    data: {
-      first_name?: string;
-      last_name?: string;
-      middle_name?: string;
-      email?: string;
-    };
-  }>({
-    queryKey: ["hh-get-me"],
-    enabled: false,
-  });
+  const { data: { data } = {} } = useGetMe({ enabled: false });
 
   const name = (data?.last_name || "") + " " + (data?.first_name || "");
   const email = data?.email || "";
@@ -92,17 +81,7 @@ function TopNav() {
 }
 
 const AppPopup = () => {
-  const { isLoading, error } = useQuery({
-    queryKey: ["hh-get-me"],
-    queryFn: async () => {
-      const response = await chrome.runtime.sendMessage<Msg>({
-        type: "HH_GET_ME",
-      });
-
-      return response;
-    },
-    staleTime: 0,
-  });
+  const { isLoading, error } = useGetMe();
 
   if (isLoading)
     return (
