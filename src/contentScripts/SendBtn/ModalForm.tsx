@@ -399,7 +399,7 @@ export function ModalForm() {
         if (foundedDeal) {
           const dealLink = await createDealLink(foundedDeal.ID);
           throw new Error(
-            `Кандидат уже откликался на вакансию. – <a rel="noreferrer nofollow noopener" href=${dealLink} target="_blank">${dealLink}</a>`,
+            `Кандидат уже откликался на вакансию. Ссылка на вакансию – <a rel="noreferrer nofollow noopener" href=${dealLink} target="_blank">${dealLink}</a>`,
           );
         }
 
