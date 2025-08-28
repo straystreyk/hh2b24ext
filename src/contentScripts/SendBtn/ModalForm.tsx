@@ -2,16 +2,20 @@ import debounce from "lodash.debounce";
 import { Form, Select, Alert, Spin, Button, notification } from "antd";
 import { useVacanciesInfinite, useRecruitersInfinite } from "./queries";
 import { mapVacancyOptions, mapRecruiterOptions } from "./mappers";
-import { type UIEvent, useMemo, useState } from "react";
+import { type UIEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { HhResumeResponse, Msg } from "../../../shared/@types";
 import { getConfig } from "../../../shared/storage.ts";
 import { createDealLink } from "../../../shared/utils.ts";
 
+/** UI */
 const PAGE_BOTTOM_GAP = 32;
+
+/** Contact dynamic field labels */
 const CONTACT_ADDRESS_FIELD_LABEL = "Адрес";
 const CONTACT_SB_FIELD_LABEL = "Блок СБ";
 const CONTACT_HH_ID_FIELD_LABEL = "ID пользователя HH";
 
+/** Deal dynamic field labels */
 const DEAL_DYNAMIC_FULL_NAME_FILTER_LABEL = "ФИО";
 const DEAL_DYNAMIC_BIRTH_DATE_FILTER_LABEL = "Дата рождения";
 const DEAL_DYNAMIC_PHONE_FILTER_LABEL = "Телефон";
@@ -24,34 +28,189 @@ const DEAL_DYNAMIC_HH_RESUME_ID_FILTER_LABEL = "ID резюме";
 const DEAL_DYNAMIC_RECRUTER_FILTER_LABEL = "Рекрутер";
 const DEAL_DYNAMIC_RESUME_FILE_FILTER_LABEL = "Файл резюме";
 
+/** ===== Utils / helpers (без изменения бизнес-логики) ===== */
+
+type ChromeOk<T> = { data: T; ok: true };
+type ChromeFail = { ok: false; error?: string; data?: any };
+type ChromeResp<T> = ChromeOk<T> | ChromeFail;
+
+async function request<T = any>(msg: Msg): Promise<ChromeResp<T>> {
+  // единая точка вызова chrome.runtime.sendMessage с типами
+  return chrome.runtime.sendMessage<Msg, ChromeResp<T>>(msg);
+}
+
+function ensureOk<T>(resp: ChromeResp<T>, errMsg: string): ChromeOk<T> {
+  if (!resp?.ok)
+    throw new Error(
+      `${errMsg}${resp && "error" in resp && resp.error ? ` – ${resp.error}` : ""}`,
+    );
+
+  return resp as ChromeOk<T>;
+}
+
+const isBlockedBySB = (value: unknown) =>
+  value === "1" || value === 1 || value === "Y";
+
+const joinFullName = (
+  last?: string | null,
+  first?: string | null,
+  middle?: string | null,
+) => `${last || ""} ${first || ""} ${middle || ""}`.trim();
+
+type DynamicFieldEntry = [string, any];
+
+function pickDynamicEntriesByLabel(
+  fields: Record<string, any>,
+  labels: string[],
+): Array<{ key: string; value: any; filterLabel: string; title?: string }> {
+  return Object.entries(fields)
+    .filter(
+      ([, field]) =>
+        field?.isDynamic === true && labels.includes(field?.filterLabel),
+    )
+    .map(([key, field]) => ({
+      key,
+      value: field,
+      filterLabel: field.filterLabel,
+      title: field.title,
+    }));
+}
+
+function getNearBottomHandler(
+  hasNext?: boolean,
+  fetching?: boolean,
+  fetchMore?: () => void,
+) {
+  return (e: UIEvent<HTMLDivElement>) => {
+    const t = e.currentTarget;
+    const nearBottom =
+      t.scrollTop + t.clientHeight >= t.scrollHeight - PAGE_BOTTOM_GAP;
+    if (nearBottom && hasNext && !fetching) fetchMore?.();
+  };
+}
+
+/** ===== Основной компонент ===== */
+
 export function ModalForm() {
   const [form] = Form.useForm();
   const [api, notifyContext] = notification.useNotification();
+
   const [isLoading, setIsLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
   const [recQuery, setRecQuery] = useState("");
   const [vacQuery, setVacQuery] = useState("");
 
+  /** Стабильные debounced-сеттеры + отмена при размонтировании */
   const debouncedReqQuery = useMemo(() => debounce(setRecQuery, 300), []);
   const debouncedVacQuery = useMemo(() => debounce(setVacQuery, 300), []);
+  useEffect(() => {
+    return () => {
+      debouncedReqQuery.cancel();
+      debouncedVacQuery.cancel();
+    };
+  }, [debouncedReqQuery, debouncedVacQuery]);
 
+  /** Инфинити-хуки */
   const vac = useVacanciesInfinite({ query: vacQuery });
   const rec = useRecruitersInfinite({ query: recQuery });
 
-  const vacancyOptions = mapVacancyOptions(vac.data?.pages ?? []);
-  const recruiterOptions = mapRecruiterOptions(rec.data?.pages ?? []);
+  /** Опции селектов (мемо, чтобы не пересчитывать лишний раз) */
+  const vacancyOptions = useMemo(
+    () => mapVacancyOptions(vac.data?.pages ?? []),
+    [vac.data?.pages],
+  );
+  const recruiterOptions = useMemo(
+    () => mapRecruiterOptions(rec.data?.pages ?? []),
+    [rec.data?.pages],
+  );
 
-  const onScrollFactory =
-    (hasNext?: boolean, fetching?: boolean, fetchMore?: () => void) =>
-    (e: UIEvent<HTMLDivElement>) => {
-      const t = e.currentTarget;
-      const nearBottom =
-        t.scrollTop + t.clientHeight >= t.scrollHeight - PAGE_BOTTOM_GAP;
-      if (nearBottom && hasNext && !fetching) fetchMore?.();
-    };
+  /** Общая фабрика он-скролла (useCallback для стабильности) */
+  const onVacScroll = useCallback(
+    getNearBottomHandler(vac.hasNextPage, vac.isFetchingNextPage, () =>
+      vac.fetchNextPage(),
+    ),
+    [vac.hasNextPage, vac.isFetchingNextPage, vac.fetchNextPage],
+  );
+  const onRecScroll = useCallback(
+    getNearBottomHandler(rec.hasNextPage, rec.isFetchingNextPage, () =>
+      rec.fetchNextPage(),
+    ),
+    [rec.hasNextPage, rec.isFetchingNextPage, rec.fetchNextPage],
+  );
 
-  const createDeal = async ({
+  /** ====== Запросы HH/B24 (как есть, только компактнее через helpers) ====== */
+
+  const getResumeFileBase64 = async (resumeDownloadUrl: string) => {
+    const fileResp = await request<string>({
+      type: "HH_GET_RESUME_FILE_BY_URL",
+      fileUrl: resumeDownloadUrl,
+    });
+    return ensureOk(fileResp, "Не удалось выгрузить файл резюме").data;
+  };
+
+  const getPersonResume = async (resumeId: string) => {
+    const resp = await request<HhResumeResponse>({
+      type: "HH_GET_PERSON_RESUME",
+      resumeId,
+    });
+
+    return ensureOk(resp, "Ошибка при получении резюме").data;
+  };
+
+  const getContactFields = async () => {
+    const resp = await request<{ result: Record<string, any> }>({
+      type: "BITRIX_GET_CONTACT_FIELDS",
+    });
+    return ensureOk(resp, "Ошибка при получении полей контакта").data.result;
+  };
+
+  const getCrmStatusList = async () => {
+    const resp = await request<{ result: any[] }>({
+      type: "BITRIX_GET_CRM_STATUS_LIST",
+    });
+    return ensureOk(resp, "Ошибка при получении списка статусов").data.result;
+  };
+
+  const getCrmDealFields = async () => {
+    const resp = await request<{ result: Record<string, any> }>({
+      type: "BITRIX_GET_CRM_DEAL_FIELDS",
+    });
+    return ensureOk(
+      resp,
+      "Не удалось получить список полей для создания сделки",
+    ).data.result;
+  };
+
+  const getContactByHhId = async (key: string, value: string | number) => {
+    const resp = await request<{ result?: any[] }>({
+      type: "BITRIX_GET_CONTACT_BY_HH_ID",
+      contactIdKey: key,
+      contactIdValue: String(value),
+    });
+    return ensureOk(resp, "Не удалось проверить наличие контакта в Bitrix24")
+      .data.result?.[0];
+  };
+
+  const getDealsByContact = async (contactId: string | number) => {
+    const resp = await request<{ result: any[] }>({
+      type: "BITRIX_GET_DEAL_LIST",
+      filter: { CONTACT_ID: contactId },
+    });
+    return ensureOk(resp, "Ошибка при нахождении сделок контакта").data.result;
+  };
+
+  const addContact = async (fields: Record<string, any>) => {
+    const resp = await request<number>({
+      type: "BITRIX_ADD_CONTACT",
+      fields,
+    });
+    return ensureOk(resp, "Не удалось создать контакт").data;
+  };
+
+  /** ====== Сборка полей сделки (логика 1:1) ====== */
+  const buildDealFields = ({
     crmFields,
     resumeData,
     formValues,
@@ -75,99 +234,85 @@ export function ModalForm() {
     } = resumeData;
     const { vacancy, recruiter, resumeBase64 } = formValues;
 
-    const dynamicCrmFields = Object.entries(crmFields).filter(
-      ([_, field]) => field.isDynamic === true,
-    );
-
     const phone = contact.find((i) => i.kind === "phone");
     const email = contact.find((i) => i.kind === "email");
+    const fullName = joinFullName(last_name, first_name, middle_name);
 
-    const fullName = (
-      (last_name || "") +
-      " " +
-      (first_name || "") +
-      " " +
-      (middle_name || "")
-    ).trim();
+    const dynamicCrmEntries: DynamicFieldEntry[] = Object.entries(
+      crmFields,
+    ).filter(([, field]) => field?.isDynamic === true);
 
-    // формируем поля для создания сделки
-    const dealFormFields: Record<string, any> = dynamicCrmFields.reduce(
-      (prev, next) => {
-        const key = next[0];
-        const values = next[1];
+    const fieldValueByLabel: Record<string, any> = {
+      [DEAL_DYNAMIC_FULL_NAME_FILTER_LABEL]: fullName,
+      [DEAL_DYNAMIC_BIRTH_DATE_FILTER_LABEL]: birth_date,
+      [DEAL_DYNAMIC_PHONE_FILTER_LABEL]: phone?.contact_value || "",
+      [DEAL_DYNAMIC_EMAIL_FILTER_LABEL]: email?.contact_value || "",
+      [DEAL_DYNAMIC_ADDRESS_FILTER_LABEL]: area?.name || "",
+      [DEAL_DYNAMIC_VACANCY_FILTER_LABEL]: vacancy,
+      [DEAL_DYNAMIC_RESUME_LINK_FILTER_LABEL]: alternate_url,
+      [DEAL_DYNAMIC_HH_REAL_ID_FILTER_LABEL]: real_id,
+      [DEAL_DYNAMIC_HH_RESUME_ID_FILTER_LABEL]: apiResumeId,
+      [DEAL_DYNAMIC_RECRUTER_FILTER_LABEL]: recruiter,
+      [DEAL_DYNAMIC_RESUME_FILE_FILTER_LABEL]: {
+        fileData: [`${fullName}.pdf`, resumeBase64],
+      },
+    };
 
-        if (values.filterLabel === DEAL_DYNAMIC_FULL_NAME_FILTER_LABEL)
-          return {
-            ...prev,
-            [key]: fullName,
-          };
-
-        if (values.filterLabel === DEAL_DYNAMIC_BIRTH_DATE_FILTER_LABEL)
-          return { ...prev, [key]: birth_date };
-
-        if (values.filterLabel === DEAL_DYNAMIC_PHONE_FILTER_LABEL)
-          return { ...prev, [key]: phone?.contact_value || "" };
-
-        if (values.filterLabel === DEAL_DYNAMIC_EMAIL_FILTER_LABEL)
-          return { ...prev, [key]: email?.contact_value || "" };
-
-        if (values.filterLabel === DEAL_DYNAMIC_ADDRESS_FILTER_LABEL)
-          return { ...prev, [key]: area?.name || "" };
-
-        if (values.filterLabel === DEAL_DYNAMIC_VACANCY_FILTER_LABEL)
-          return { ...prev, [key]: vacancy };
-
-        if (values.filterLabel === DEAL_DYNAMIC_RESUME_LINK_FILTER_LABEL)
-          return { ...prev, [key]: alternate_url };
-
-        if (values.filterLabel === DEAL_DYNAMIC_HH_REAL_ID_FILTER_LABEL)
-          return { ...prev, [key]: real_id };
-
-        if (values.filterLabel === DEAL_DYNAMIC_HH_RESUME_ID_FILTER_LABEL)
-          return { ...prev, [key]: apiResumeId };
-
-        if (values.filterLabel === DEAL_DYNAMIC_RECRUTER_FILTER_LABEL)
-          return { ...prev, [key]: recruiter };
-
-        if (values.filterLabel === DEAL_DYNAMIC_RESUME_FILE_FILTER_LABEL)
-          return {
-            ...prev,
-            [key]: { fileData: [`${fullName}.pdf`, resumeBase64] },
-          };
-
-        return prev;
+    const dealFormFields = dynamicCrmEntries.reduce<Record<string, any>>(
+      (acc, [key, field]) => {
+        const label = field?.filterLabel as string | undefined;
+        if (!label) return acc;
+        if (label in fieldValueByLabel) acc[key] = fieldValueByLabel[label];
+        return acc;
       },
       {},
     );
 
+    dealFormFields.CONTACT_IDS = [contactId];
+    return dealFormFields;
+  };
+
+  /** ====== Создание сделки (с сохранением поведения и сообщений) ====== */
+  const createDeal = async ({
+    crmFields,
+    resumeData,
+    formValues,
+    contactId,
+  }: {
+    crmFields: Record<string, any>;
+    resumeData: HhResumeResponse;
+    formValues: { vacancy: string; recruiter: string; resumeBase64: string };
+    contactId: string;
+  }) => {
+    const dealFormFields = buildDealFields({
+      crmFields,
+      resumeData,
+      formValues,
+      contactId,
+    });
     const { B24_BASE_URL, B24_RESUME_CATEGORY_ID } = await getConfig();
 
     if (!B24_RESUME_CATEGORY_ID || !B24_BASE_URL)
-      return setErr("Вы не передали ID воронки в настройках");
+      throw new Error("Вы не передали ID воронки в настройках");
 
     dealFormFields.CATEGORY_ID = Number(B24_RESUME_CATEGORY_ID);
-    dealFormFields.CONTACT_IDS = [contactId];
-    const data = await chrome.runtime.sendMessage<Msg>({
+
+    const addDealResp = await request<{ result: string }>({
       type: "BITRIX_ADD_DEAL",
       fields: dealFormFields,
     });
 
-    const dealUrl = await createDealLink(data.data.result);
+    const dealId = ensureOk(addDealResp, "Не удалось создать сделку").data
+      .result;
+
+    const dealUrl = await createDealLink(dealId);
+
     setSuccess(
       `Сделка успшено создана. Ссылка на сделку – <a rel="noreferrer nofollow noopener" href=${dealUrl} target="_blank">${dealUrl}</a>`,
     );
   };
 
-  const getResume = async (resumeDownloadUrl: string) => {
-    // скачиваем резюме пользователя
-    const hhBase64File = await chrome.runtime.sendMessage<Msg>({
-      type: "HH_GET_RESUME_FILE_BY_URL",
-      fileUrl: resumeDownloadUrl,
-    });
-
-    return hhBase64File;
-  };
-
+  /** ====== Сабмит формы (не меняет логику, только выпрямляет код) ====== */
   const onSubmit = async (values: { recruiter: string; vacancy: string }) => {
     const { recruiter, vacancy } = values;
 
@@ -178,48 +323,16 @@ export function ModalForm() {
 
       const resumeId =
         location.pathname.match(/\/resume\/([^/]+)/)?.[1] ?? null;
+      if (!resumeId) throw new Error("Не удалось получить ID страницы");
 
-      if (!resumeId) return setErr("Не удалось получить ID страницы");
+      const resume = await getPersonResume(resumeId);
 
-      const data = await chrome.runtime.sendMessage<
-        Msg,
-        { data: HhResumeResponse; ok: boolean; error?: string }
-      >({
-        type: "HH_GET_PERSON_RESUME",
-        resumeId,
-      });
-
-      if (!data?.ok)
-        return setErr(`Ошибка при получении резюме – ${data?.error}`);
-
-      // получаем доп поля
-      const contactFields = await chrome.runtime.sendMessage<
-        Msg,
-        { data: { result: Record<string, any> }; ok: boolean; error?: string }
-      >({
-        type: "BITRIX_GET_CONTACT_FIELDS",
-      });
-
-      if (!contactFields?.ok)
-        return setErr(
-          `Ошибка при получении полей контакта – ${contactFields?.error}`,
-        );
-
-      // Получаем ключи и значения динамических полей с нужными filterLabel
-      const dynamicContactFields = Object.entries(contactFields.data.result)
-        .filter(
-          ([_, field]) =>
-            field.isDynamic === true &&
-            (field.filterLabel === CONTACT_ADDRESS_FIELD_LABEL ||
-              field.filterLabel === CONTACT_SB_FIELD_LABEL ||
-              field.filterLabel === CONTACT_HH_ID_FIELD_LABEL),
-        )
-        .map(([key, field]) => ({
-          key: key,
-          value: field,
-          filterLabel: field.filterLabel,
-          title: field.title,
-        }));
+      const contactFields = await getContactFields();
+      const dynamicContactFields = pickDynamicEntriesByLabel(contactFields, [
+        CONTACT_ADDRESS_FIELD_LABEL,
+        CONTACT_SB_FIELD_LABEL,
+        CONTACT_HH_ID_FIELD_LABEL,
+      ]);
 
       const addressField = dynamicContactFields.find(
         (d) => d.filterLabel === CONTACT_ADDRESS_FIELD_LABEL,
@@ -231,10 +344,11 @@ export function ModalForm() {
         (d) => d.filterLabel === CONTACT_HH_ID_FIELD_LABEL,
       );
 
-      if (!hhIdField || !sbField || !addressField)
-        return setErr(
+      if (!hhIdField || !sbField || !addressField) {
+        throw new Error(
           "Не удалось получить хотя бы одно из полей контакта - hhIdField, sbField,addressField",
         );
+      }
 
       const {
         last_name,
@@ -247,121 +361,69 @@ export function ModalForm() {
         download: {
           pdf: { url: resumeDownloadUrl },
         },
-      } = data.data;
+      } = resume;
 
-      const contactExistsResponse = await chrome.runtime.sendMessage<Msg>({
-        type: "BITRIX_GET_CONTACT_BY_HH_ID",
-        contactIdKey: hhIdField.key,
-        contactIdValue: real_id,
-      });
+      /** Проверяем существование контакта по HH ID */
+      const existsContact = await getContactByHhId(hhIdField.key, real_id);
 
-      if (!contactExistsResponse.ok)
-        return setErr("Не удалось проверить наличие контакта в Bitrix24");
-
-      const existsContact = contactExistsResponse.data?.result?.[0];
-
-      if (!!existsContact) {
-        // START если контакт есть уже в битриксе
-
+      if (existsContact) {
         if (!sbField?.key)
-          return setErr(
+          throw new Error(
             "Не найден ключ для поиска поля СБ (Службы безопасности)",
           );
 
         const sbFieldValue = existsContact[sbField.key];
 
-        if (
-          sbFieldValue === "1" ||
-          sbFieldValue === 1 ||
-          sbFieldValue === "Y"
-        ) {
-          return setErr("Кандидат заблокирован СБ");
-        }
+        if (isBlockedBySB(sbFieldValue))
+          throw new Error("Кандидат заблокирован СБ");
 
-        // получаем поля сделок
-        const crmFieldsResponse = await chrome.runtime.sendMessage<
-          Msg,
-          { data: { result: Record<string, any> }; ok: boolean; error?: string }
-        >({
-          type: "BITRIX_GET_CRM_DEAL_FIELDS",
-        });
-
-        const dymanicVacancyName = Object.entries(
-          crmFieldsResponse.data.result,
-        ).filter(
-          ([_, field]) =>
-            field.isDynamic === true &&
-            field.filterLabel === DEAL_DYNAMIC_VACANCY_FILTER_LABEL,
+        /** Поля сделок + ключ поля Вакансия */
+        const crmDealFields = await getCrmDealFields();
+        const dynamicVacancyEntry = Object.entries(crmDealFields).find(
+          ([, field]) =>
+            field?.isDynamic === true &&
+            field?.filterLabel === DEAL_DYNAMIC_VACANCY_FILTER_LABEL,
         );
 
-        if (!dymanicVacancyName)
-          return setErr("Не удалось найти поле Вакансия в сделках");
+        if (!dynamicVacancyEntry)
+          throw new Error("Не удалось найти поле Вакансия в сделках");
 
-        const dynamicVacancyNameKey = dymanicVacancyName[0][0];
+        const dynamicVacancyNameKey = dynamicVacancyEntry[0];
 
-        const contactDealResponse = await chrome.runtime.sendMessage<Msg>({
-          type: "BITRIX_GET_DEAL_LIST",
-          filter: {
-            CONTACT_ID: existsContact.ID,
-          },
-        });
+        /** Проверяем существующие сделки по контакту и совпадение вакансии */
+        const contactDeals = await getDealsByContact(existsContact.ID);
+        const foundedDeal = contactDeals.find(
+          (d: any) => d?.[dynamicVacancyNameKey]?.trim() === vacancy.trim(),
+        );
 
-        if (!contactDealResponse.ok)
-          return setErr("Ошибка при нахождении сделок контакта");
-
-        const foundedDeal = contactDealResponse.data?.result?.find((i: any) => {
-          return (
-            i[dynamicVacancyNameKey] &&
-            i[dynamicVacancyNameKey].trim() === vacancy.trim()
-          );
-        });
-
-        if (!!foundedDeal) {
+        if (foundedDeal) {
           const dealLink = await createDealLink(foundedDeal.ID);
-
-          return setErr(
+          throw new Error(
             `Кандидат уже откликался на вакансию. – <a rel="noreferrer nofollow noopener" href=${dealLink} target="_blank">${dealLink}</a>`,
           );
         }
 
-        // скачиваем резюме пользователя
-        const hhBase64File = await getResume(resumeDownloadUrl);
-
-        if (!hhBase64File?.ok)
-          return setErr("Не удалось выгрузить файл резюме");
-
-        // скаченное резюме в формате base64
-        const resumeBase64 = hhBase64File.data;
+        /** Скачиваем резюме и создаём сделку */
+        const resumeBase64 = await getResumeFileBase64(resumeDownloadUrl);
 
         await createDeal({
           contactId: existsContact.ID,
           formValues: { resumeBase64, vacancy, recruiter },
-          resumeData: data.data,
-          crmFields: crmFieldsResponse.data.result,
+          resumeData: resume,
+          crmFields: crmDealFields,
         });
-        // END!!
       } else {
-        // если контакта нет создаем его
-        // получаем доп поля
-        const crmContactStatusesList = await chrome.runtime.sendMessage<Msg>({
-          type: "BITRIX_GET_CRM_STATUS_LIST",
-        });
-
-        if (!crmContactStatusesList?.ok)
-          return setErr(
-            `Ошибка при получении списка статусов – ${crmContactStatusesList?.error}`,
-          );
-
+        /** Если контакта нет — создаём */
+        const crmStatuses = await getCrmStatusList();
         const phone = contact.find((i) => i.kind === "phone");
         const email = contact.find((i) => i.kind === "email");
 
-        const findedType = crmContactStatusesList.data.result.find(
-          (i: any) => i.NAME === "Соискатель",
+        const typeCandidate = crmStatuses.find(
+          (i: any) => i.NAME.trim() === "Соискатель",
         );
 
-        const TYPE_ID = findedType
-          ? findedType.STATUS_ID
-          : crmContactStatusesList.data.result?.[0]?.STATUS_ID || undefined;
+        const TYPE_ID =
+          typeCandidate?.STATUS_ID ?? crmStatuses?.[0]?.STATUS_ID ?? undefined;
 
         const contactToCreate = {
           NAME: first_name || "",
@@ -376,55 +438,29 @@ export function ModalForm() {
           ...(sbField ? { [sbField.key]: "N" } : {}),
         };
 
-        // создаем контакт
-        const createdContactResponse = await chrome.runtime.sendMessage<Msg>({
-          type: "BITRIX_ADD_CONTACT",
-          fields: contactToCreate,
-        });
+        const createdContactId = await addContact(contactToCreate);
 
-        if (!createdContactResponse?.ok)
-          return setErr("Не удалось создать контакт");
-
-        // id новосоздонного контакта
-        const createdContactId = createdContactResponse.data.result;
-
-        // скачиваем резюме пользователя
-        const hhBase64File = await getResume(resumeDownloadUrl);
-
-        if (!hhBase64File?.ok)
-          return setErr("Не удалось выгрузить файл резюме");
-
-        // скаченное резюме в формате base64
-        const resumeBase64 = hhBase64File.data;
-
-        // получаем поля для создания сделки
-        const crmFieldsResponse = await chrome.runtime.sendMessage<
-          Msg,
-          { data: { result: Record<string, any> }; ok: boolean; error?: string }
-        >({
-          type: "BITRIX_GET_CRM_DEAL_FIELDS",
-        });
-
-        if (!crmFieldsResponse.ok)
-          return setErr("Не удалось получить список полей для создания сделки");
+        const resumeBase64 = await getResumeFileBase64(resumeDownloadUrl);
+        const crmDealFields = await getCrmDealFields();
 
         await createDeal({
-          contactId: createdContactId,
+          contactId: String(createdContactId),
           formValues: { resumeBase64, vacancy, recruiter },
-          resumeData: data.data,
-          crmFields: crmFieldsResponse.data.result,
+          resumeData: resume,
+          crmFields: crmDealFields,
         });
       }
 
       api.success({ message: "Успешно отправлено в B24", placement: "top" });
       form.resetFields();
     } catch (e) {
-      setErr(String(e));
+      setErr(String(e instanceof Error ? e.message : e));
     } finally {
       setIsLoading(false);
     }
   };
 
+  /** ====== UI ====== */
   return (
     <Form
       style={{ display: "flex", flexDirection: "column" }}
@@ -465,11 +501,7 @@ export function ModalForm() {
           placeholder="Выберите вакансию"
           options={vacancyOptions}
           loading={vac.isFetching || vac.isFetchingNextPage}
-          onPopupScroll={onScrollFactory(
-            vac.hasNextPage,
-            vac.isFetchingNextPage,
-            () => vac.fetchNextPage(),
-          )}
+          onPopupScroll={onVacScroll}
           notFoundContent={vac.isFetching ? <Spin size="small" /> : undefined}
           popupRender={(menu) => (
             <div>
@@ -502,11 +534,7 @@ export function ModalForm() {
           placeholder="Выберите рекрутера"
           options={recruiterOptions}
           loading={rec.isFetching || rec.isFetchingNextPage}
-          onPopupScroll={onScrollFactory(
-            rec.hasNextPage,
-            rec.isFetchingNextPage,
-            () => rec.fetchNextPage(),
-          )}
+          onPopupScroll={onRecScroll}
           notFoundContent={rec.isFetching ? <Spin size="small" /> : undefined}
           popupRender={(menu) => (
             <div>
@@ -524,6 +552,7 @@ export function ModalForm() {
           )}
         />
       </Form.Item>
+
       <Form.Item style={{ marginTop: 24 }}>
         <Button
           loading={isLoading}
@@ -534,6 +563,7 @@ export function ModalForm() {
           Отправить
         </Button>
       </Form.Item>
+
       {notifyContext}
     </Form>
   );

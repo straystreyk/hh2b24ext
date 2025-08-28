@@ -12,6 +12,7 @@ chrome.runtime.onMessage.addListener((msg: Msg, _sender, sendResponse) => {
 
     if (msg?.type === "HH_GET_PERSON_RESUME") {
       const { data } = await hh.get(`/resumes/${msg.resumeId}`);
+
       sendResponse({
         ok: true,
         data,
