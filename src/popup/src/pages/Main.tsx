@@ -178,7 +178,7 @@ const MainPage = () => {
       <Row gutter={[12, 12]}>
         <Col xs={12}>
           <Statistic
-            title="Открытые вакансии"
+            title="Открытые вакансии на HeadHunter"
             value={data.open_vacancies ?? 0}
           />
         </Col>
