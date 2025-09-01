@@ -11,7 +11,7 @@ import { createDealLink } from "../../../shared/utils.ts";
 const PAGE_BOTTOM_GAP = 32;
 
 /** Contact dynamic field labels */
-const CONTACT_ADDRESS_FIELD_LABEL = "Адрес";
+const CONTACT_CITY_FIELD_LABEL = "Город";
 const CONTACT_SB_FIELD_LABEL = "Блок СБ";
 const CONTACT_HH_ID_FIELD_LABEL = "ID пользователя HH";
 
@@ -20,19 +20,26 @@ const DEAL_DYNAMIC_FULL_NAME_FILTER_LABEL = "ФИО";
 const DEAL_DYNAMIC_BIRTH_DATE_FILTER_LABEL = "Дата рождения";
 const DEAL_DYNAMIC_PHONE_FILTER_LABEL = "Телефон";
 const DEAL_DYNAMIC_EMAIL_FILTER_LABEL = "Email";
-const DEAL_DYNAMIC_ADDRESS_FILTER_LABEL = "Адрес";
+const DEAL_DYNAMIC_CITY_FILTER_LABEL = "Город";
 const DEAL_DYNAMIC_VACANCY_FILTER_LABEL = "Вакансия";
 const DEAL_DYNAMIC_RESUME_LINK_FILTER_LABEL = "Ссылка на резюме";
 const DEAL_DYNAMIC_HH_REAL_ID_FILTER_LABEL = "ID пользователя HH";
 const DEAL_DYNAMIC_HH_RESUME_ID_FILTER_LABEL = "ID резюме";
-const DEAL_DYNAMIC_RECRUTER_FILTER_LABEL = "Рекрутер";
 const DEAL_DYNAMIC_RESUME_FILE_FILTER_LABEL = "Файл резюме";
+const DEAL_DYNAMIC_PHOTO_FILTER_LABEL = "Фотография";
 
 /** ===== Utils / helpers (без изменения бизнес-логики) ===== */
 
 type ChromeOk<T> = { data: T; ok: true };
 type ChromeFail = { ok: false; error?: string; data?: any };
 type ChromeResp<T> = ChromeOk<T> | ChromeFail;
+
+type TDealFormValues = {
+  vacancyId: string;
+  recruiterId: string;
+  resumeBase64: string;
+  photoInfo?: { base64: string; ext?: string };
+};
 
 async function request<T = any>(msg: Msg): Promise<ChromeResp<T>> {
   // единая точка вызова chrome.runtime.sendMessage с типами
@@ -150,6 +157,15 @@ export function ModalForm() {
     return ensureOk(fileResp, "Не удалось выгрузить файл резюме").data;
   };
 
+  const getPersonResumePhoto = async (photoUrl: string) => {
+    const resp = await request<{ base64: string; ext: string }>({
+      type: "HH_GET_PERSON_PHOTO_BY_URL",
+      fileUrl: photoUrl,
+    });
+
+    return ensureOk(resp, "Ошибка при получении фото кандидата").data;
+  };
+
   const getPersonResume = async (resumeId: string) => {
     const resp = await request<HhResumeResponse>({
       type: "HH_GET_PERSON_RESUME",
@@ -219,7 +235,7 @@ export function ModalForm() {
   }: {
     crmFields: Record<string, any>;
     resumeData: HhResumeResponse;
-    formValues: { vacancy: string; recruiter: string; resumeBase64: string };
+    formValues: TDealFormValues;
     contactId: string;
   }) => {
     const {
@@ -233,7 +249,7 @@ export function ModalForm() {
       middle_name,
       contact,
     } = resumeData;
-    const { vacancy, recruiter, resumeBase64 } = formValues;
+    const { vacancyId, recruiterId, resumeBase64, photoInfo } = formValues;
 
     const phone = contact.find((i) => i.kind === "phone");
     const email = contact.find((i) => i.kind === "email");
@@ -248,15 +264,24 @@ export function ModalForm() {
       [DEAL_DYNAMIC_BIRTH_DATE_FILTER_LABEL]: birth_date,
       [DEAL_DYNAMIC_PHONE_FILTER_LABEL]: phone?.contact_value || "",
       [DEAL_DYNAMIC_EMAIL_FILTER_LABEL]: email?.contact_value || "",
-      [DEAL_DYNAMIC_ADDRESS_FILTER_LABEL]: area?.name || "",
-      [DEAL_DYNAMIC_VACANCY_FILTER_LABEL]: vacancy,
+      [DEAL_DYNAMIC_CITY_FILTER_LABEL]: area?.name || "",
+      [DEAL_DYNAMIC_VACANCY_FILTER_LABEL]: vacancyId,
       [DEAL_DYNAMIC_RESUME_LINK_FILTER_LABEL]: alternate_url,
       [DEAL_DYNAMIC_HH_REAL_ID_FILTER_LABEL]: real_id,
       [DEAL_DYNAMIC_HH_RESUME_ID_FILTER_LABEL]: apiResumeId,
-      [DEAL_DYNAMIC_RECRUTER_FILTER_LABEL]: recruiter,
       [DEAL_DYNAMIC_RESUME_FILE_FILTER_LABEL]: {
         fileData: [`${fullName}.pdf`, resumeBase64],
       },
+      ...(photoInfo
+        ? {
+            [DEAL_DYNAMIC_PHOTO_FILTER_LABEL]: {
+              fileData: [
+                `${fullName}${photoInfo?.ext ? `.${photoInfo.ext}` : ""}`,
+                photoInfo.base64,
+              ],
+            },
+          }
+        : {}),
     };
 
     const dealFormFields = dynamicCrmEntries.reduce<Record<string, any>>(
@@ -270,6 +295,7 @@ export function ModalForm() {
     );
 
     dealFormFields.CONTACT_IDS = [contactId];
+    dealFormFields.ASSIGNED_BY_ID = recruiterId;
     return dealFormFields;
   };
 
@@ -282,7 +308,7 @@ export function ModalForm() {
   }: {
     crmFields: Record<string, any>;
     resumeData: HhResumeResponse;
-    formValues: { vacancy: string; recruiter: string; resumeBase64: string };
+    formValues: TDealFormValues;
     contactId: string;
   }) => {
     const dealFormFields = buildDealFields({
@@ -291,12 +317,20 @@ export function ModalForm() {
       formValues,
       contactId,
     });
-    const { B24_BASE_URL, B24_RESUME_CATEGORY_ID } = await getConfig();
+    const {
+      B24_BASE_URL,
+      B24_RESUME_CATEGORY_ID,
+      B24_RESUME_CATEGORY_STAGE_ID,
+    } = await getConfig();
 
     if (!B24_RESUME_CATEGORY_ID || !B24_BASE_URL)
       throw new Error("Вы не передали ID воронки в настройках");
 
     dealFormFields.CATEGORY_ID = Number(B24_RESUME_CATEGORY_ID);
+
+    if (B24_RESUME_CATEGORY_STAGE_ID) {
+      dealFormFields.STAGE_ID = B24_RESUME_CATEGORY_STAGE_ID;
+    }
 
     const addDealResp = await request<{ result: string }>({
       type: "BITRIX_ADD_DEAL",
@@ -314,8 +348,11 @@ export function ModalForm() {
   };
 
   /** ====== Сабмит формы (не меняет логику, только выпрямляет код) ====== */
-  const onSubmit = async (values: { recruiter: string; vacancy: string }) => {
-    const { recruiter, vacancy } = values;
+  const onSubmit = async (values: {
+    recruiterId: string;
+    vacancyId: string;
+  }) => {
+    const { recruiterId, vacancyId } = values;
 
     try {
       setErr(null);
@@ -330,13 +367,13 @@ export function ModalForm() {
 
       const contactFields = await getContactFields();
       const dynamicContactFields = pickDynamicEntriesByLabel(contactFields, [
-        CONTACT_ADDRESS_FIELD_LABEL,
+        CONTACT_CITY_FIELD_LABEL,
         CONTACT_SB_FIELD_LABEL,
         CONTACT_HH_ID_FIELD_LABEL,
       ]);
 
       const addressField = dynamicContactFields.find(
-        (d) => d.filterLabel === CONTACT_ADDRESS_FIELD_LABEL,
+        (d) => d.filterLabel === CONTACT_CITY_FIELD_LABEL,
       );
       const sbField = dynamicContactFields.find(
         (d) => d.filterLabel === CONTACT_SB_FIELD_LABEL,
@@ -362,6 +399,7 @@ export function ModalForm() {
         download: {
           pdf: { url: resumeDownloadUrl },
         },
+        photo,
       } = resume;
 
       /** Проверяем существование контакта по HH ID */
@@ -394,7 +432,7 @@ export function ModalForm() {
         /** Проверяем существующие сделки по контакту и совпадение вакансии */
         const contactDeals = await getDealsByContact(existsContact.ID);
         const foundedDeal = contactDeals.find(
-          (d: any) => d?.[dynamicVacancyNameKey]?.trim() === vacancy.trim(),
+          (d: any) => d?.[dynamicVacancyNameKey]?.trim() === vacancyId.trim(),
         );
 
         if (foundedDeal) {
@@ -404,12 +442,22 @@ export function ModalForm() {
           );
         }
 
-        /** Скачиваем резюме и создаём сделку */
+        /** Скачиваем резюме, фото и создаём сделку */
         const resumeBase64 = await getResumeFileBase64(resumeDownloadUrl);
+
+        let photoInfo = undefined;
+        if (photo?.medium) {
+          photoInfo = await getPersonResumePhoto(photo.medium);
+        }
 
         await createDeal({
           contactId: existsContact.ID,
-          formValues: { resumeBase64, vacancy, recruiter },
+          formValues: {
+            resumeBase64,
+            vacancyId,
+            recruiterId,
+            photoInfo,
+          },
           resumeData: resume,
           crmFields: crmDealFields,
         });
@@ -433,6 +481,7 @@ export function ModalForm() {
           BIRTHDATE: birth_date || "",
           PHONE: [{ VALUE: phone?.contact_value || "", VALUE_TYPE: "MOBILE" }],
           EMAIL: [{ VALUE: email?.contact_value || "", VALUE_TYPE: "WORK" }],
+          ASSIGNED_BY_ID: recruiterId,
           ...(TYPE_ID ? { TYPE_ID } : {}),
           ...(addressField ? { [addressField.key]: area?.name || "" } : {}),
           ...(hhIdField ? { [hhIdField.key]: real_id } : {}),
@@ -442,11 +491,22 @@ export function ModalForm() {
         const createdContactId = await addContact(contactToCreate);
 
         const resumeBase64 = await getResumeFileBase64(resumeDownloadUrl);
+
+        let photoInfo = undefined;
+        if (photo?.medium) {
+          photoInfo = await getPersonResumePhoto(photo.medium);
+        }
+
         const crmDealFields = await getCrmDealFields();
 
         await createDeal({
           contactId: String(createdContactId.result),
-          formValues: { resumeBase64, vacancy, recruiter },
+          formValues: {
+            resumeBase64,
+            vacancyId,
+            recruiterId,
+            photoInfo,
+          },
           resumeData: resume,
           crmFields: crmDealFields,
         });
@@ -490,7 +550,7 @@ export function ModalForm() {
 
       <Form.Item
         label="Вакансия"
-        name="vacancy"
+        name="vacancyId"
         rules={[{ required: true, message: "Выберите вакансию" }]}
         validateTrigger={["onChange", "onBlur"]}
       >
@@ -523,7 +583,7 @@ export function ModalForm() {
 
       <Form.Item
         label="Рекрутер"
-        name="recruiter"
+        name="recruiterId"
         rules={[{ required: true, message: "Выберите рекрутера" }]}
         validateTrigger={["onChange", "onBlur"]}
       >

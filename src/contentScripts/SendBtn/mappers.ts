@@ -5,7 +5,7 @@ export function mapVacancyOptions(pages: any[]): Option[] {
   return pages
     .flatMap((p) => p?.result?.items ?? [])
     .map((it: any) => ({
-      value: /*String(it.id) */ it.title,
+      value: String(it.id),
       label: it.title,
     }));
 }
@@ -21,7 +21,7 @@ export function mapRecruiterOptions(pages: any[]): Option[] {
         .trim();
       const label = name || u.EMAIL || `ID ${id}`;
       return {
-        value: /*id*/ label,
+        value: id,
         label,
       };
     });

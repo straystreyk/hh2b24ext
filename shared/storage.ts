@@ -13,6 +13,8 @@ export const DEFAULTS = {
   B24_RESUME_CATEGORY_ID: import.meta.env.VITE_B24_RESUME_CATEGORY_ID
     ? Number(import.meta.env.VITE_B24_RESUME_CATEGORY_ID)
     : 0,
+  B24_RESUME_CATEGORY_STAGE_ID:
+    import.meta.env.VITE_B24_RESUME_CATEGORY_STAGE_ID || "",
 } as const;
 
 export type Config = {

@@ -3,6 +3,7 @@ import { getConfig } from "../shared/storage";
 import { hh } from "./hh";
 import { bitrix } from "./bitrix";
 import { arrayBufferToBase64 } from "../shared/utils";
+import { extension } from "mime-types";
 
 const PAGE_SIZE = 50;
 
@@ -44,6 +45,26 @@ chrome.runtime.onMessage.addListener((msg: Msg, _sender, sendResponse) => {
       const base64 = await arrayBufferToBase64(data);
 
       sendResponse({ ok: true, data: base64 });
+    }
+
+    if (msg?.type === "HH_GET_PERSON_PHOTO_BY_URL") {
+      try {
+        // обрабатываем 404 ошибку так как может не быть фото
+        const { data, headers } = await hh.get(msg.fileUrl, {
+          responseType: "arraybuffer",
+        });
+
+        const mime = headers["content-type"]?.split(";")[0] || undefined;
+        let ext = undefined;
+        if (mime) {
+          ext = extension(mime) || undefined;
+        }
+        const base64 = await arrayBufferToBase64(data, mime);
+
+        sendResponse({ ok: true, data: { base64, ext } });
+      } catch (e) {
+        sendResponse({ ok: true, data: null });
+      }
     }
 
     if (msg?.type === "BITRIX_GET_CONTACT_FIELDS") {

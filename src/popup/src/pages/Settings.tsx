@@ -114,7 +114,16 @@ const SettingsPage = () => {
       <Form
         form={form}
         layout="vertical"
-        requiredMark="optional"
+        requiredMark={(label, { required }) =>
+          required ? (
+            <>
+              <span style={{ color: "red" }}>*&nbsp;</span>
+              {label}
+            </>
+          ) : (
+            label
+          )
+        }
         disabled={loading}
       >
         <Space direction="vertical" size={16} style={{ display: "flex" }}>
@@ -185,6 +194,12 @@ const SettingsPage = () => {
               ]}
             >
               <Input allowClear placeholder="Напр.: 3" />
+            </Form.Item>
+            <Form.Item
+              label="ID стадии воронки для выгрузки резюме"
+              name="B24_RESUME_CATEGORY_STAGE_ID"
+            >
+              <Input allowClear placeholder="Напр.: C3:EXECUTING" />
             </Form.Item>
           </Card>
           <Space

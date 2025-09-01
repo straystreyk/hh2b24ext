@@ -14,6 +14,10 @@ export type Msg =
       fileUrl: string;
     }
   | {
+      type: "HH_GET_PERSON_PHOTO_BY_URL";
+      fileUrl: string;
+    }
+  | {
       type: "BITRIX_GET_VACANCIES";
       page: number;
       query?: string;
@@ -117,15 +121,9 @@ export interface HhDriverLicense extends HhId {
 } // { id:'A'|'B'|..., name?:string }
 export interface HhTag extends HhId {} // Тег как объект с id
 
-// ===== Фотографии / изображения =====
-export interface HhImage {
-  url: string;
-}
 export interface HhPhoto {
-  id?: string;
-  small?: HhImage;
-  medium?: HhImage;
-  url?: string;
+  small?: string;
+  medium?: string;
 }
 
 // ===== Образование =====
